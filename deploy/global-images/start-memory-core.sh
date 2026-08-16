@@ -99,7 +99,13 @@ memory:
     timeoutMs: 5000
   storeBackend: sqlite
   embedding:
-    provider: none
+    # lab pilot: local Ollama (OpenAI-compatible) - no cloud key, corpus stays on-machine
+    enabled: true
+    provider: openai
+    baseUrl: http://host.docker.internal:11434/v1
+    apiKey: ollama-local
+    model: nomic-embed-text
+    dimensions: 768  # required >0 or core silently writes ZERO VECTOR (story-04 finding)
 
 # ── Skill 模块 ──
 skill:
@@ -108,7 +114,7 @@ skill:
     mode: bm25
     searchTopK: 20
   extraction:
-    enabled: true
+    enabled: false  # lab-home pilot: auto-Skills extraction OFF (story 02); manual skill entries only
     maxIterations: 16
     queue:
       backend: local
@@ -122,10 +128,10 @@ skill:
 YAML
 
 info "启动 memory-core (image=$MEMORY_CORE_IMAGE, port=$MEMORY_CORE_PORT)"
-$DOCKER run -d --name "$CONTAINER" \
+$DOCKER run -d --name "$CONTAINER" --restart unless-stopped \
   --network "$NETWORK" \
   --network-alias memory-core \
-  -p "${MEMORY_CORE_PORT}:8420" \
+  -p "127.0.0.1:${MEMORY_CORE_PORT}:8420" \
   -v "${MEMORY_CORE_VOLUME}:/data/tdai-memory" \
   -v "$CORE_CONFIG_FILE:/data/config/tdai-gateway.yaml:ro" \
   -e TDAI_GATEWAY_PORT=8420 \
@@ -172,7 +178,7 @@ verify_user_key() {
   [[ "$code" == "200" ]]
 }
 
-info "初始化 admin user（username=${MEMORY_CORE_ADMIN_USERNAME}, key 持久化 → $ADMIN_KEY_FILE）..."
+info "初始化 admin user（username=${MEMORY_CORE_ADMIN_USERNAME}, key 持久化 → ${ADMIN_KEY_FILE}）..."
 
 # 生成随机 key（首次 init-admin 用；若之前有 file 就复用）
 if [[ -s "$ADMIN_KEY_FILE" ]]; then
