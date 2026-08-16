@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# 停止并移除三件套容器。
+# 停止并移除 fleet-mem compose 项目的三件套容器。
 #
 # 用法：
 #   ./stop-all.sh              # 停容器，保留 volume（数据保留）
-#   ./stop-all.sh --purge      # 停容器 + 删 volume + 删网络（彻底清理）
+#   ./stop-all.sh --purge      # 停容器 + 删 volume + 删网络 + 删 admin key/config（彻底清理）
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,12 +22,22 @@ fi
 MEMORY_CORE_VOLUME="${MEMORY_CORE_VOLUME:-tdai-memory-core-data}"
 PANEL_VOLUME="${PANEL_VOLUME:-tdai-panel-data}"
 
+COMPOSE_PROJECT=fleet-mem
+COMPOSE_FILE="$SCRIPT_DIR/compose.yaml"
+
+# 优先用 compose down（干净移除整个项目）；找不到 compose.yaml 时兜底逐个 rm。
+if [[ -f "$COMPOSE_FILE" ]]; then
+  info "docker compose down（项目 ${COMPOSE_PROJECT}）"
+  env_arg=()
+  [[ -f "$ENV_FILE" ]] && env_arg=(--env-file "$ENV_FILE")
+  $DOCKER compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE" \
+    --project-directory "$SCRIPT_DIR" ${env_arg[@]+"${env_arg[@]}"} down || true
+fi
+# 兜底：清掉任何遗留的同名容器（例如旧的 standalone docker run 版本）。
 for c in tdai-proxy tdai-memory-hub tdai-memory-core; do
   if $DOCKER ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$c"; then
-    info "停止并移除 $c"
+    info "移除遗留容器 $c"
     $DOCKER rm -f "$c" >/dev/null
-  else
-    info "$c 未运行，跳过"
   fi
 done
 

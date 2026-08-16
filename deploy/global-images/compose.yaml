@@ -1,0 +1,104 @@
+# fleet-mem: groups the 3 memory-hub containers under one compose project.
+#
+# Replaces the three standalone `docker run` scripts (start-memory-core.sh /
+# start-memory-hub.sh / start-proxy.sh) with a single grouped stack so Docker
+# Desktop shows them together and every container carries a restart policy.
+#
+# Run from THIS directory (where .env + the generated configs live):
+#   docker compose -p fleet-mem up -d      # via ./start-all.sh
+#   docker compose -p fleet-mem down       # via ./stop-all.sh
+#
+# Preserves the running setup exactly: same container_names, the existing
+# (external) network + named volumes, same ports/exposure, and the same runtime
+# env the start-*.sh scripts injected. .env is read automatically by compose for
+# ${...} interpolation - the same MEMORY_LLM_* / *_PORT values the scripts load.
+#
+# The two generated config files (.memory-core-config/tdai-gateway.yaml,
+# .proxy-config/config.yaml) and the .admin-key are still produced by the
+# start-*.sh scripts before `up`; compose only mounts them (read-only).
+name: fleet-mem
+
+services:
+  memory-core:
+    image: ${MEMORY_CORE_IMAGE:-agentmemory/memory-core:latest}
+    container_name: tdai-memory-core
+    restart: unless-stopped
+    networks:
+      - tdai-memory-stack
+    ports:
+      - "127.0.0.1:${MEMORY_CORE_PORT:-8420}:8420"
+    volumes:
+      - tdai-memory-core-data:/data/tdai-memory
+      - ./.memory-core-config/tdai-gateway.yaml:/data/config/tdai-gateway.yaml:ro
+    environment:
+      TDAI_GATEWAY_PORT: "8420"
+      TDAI_GATEWAY_HOST: "0.0.0.0"
+      # Empty by default: proxy auth is incompatible with a non-empty gateway key
+      # (see start-memory-core.sh). .env keeps MEMORY_CORE_GATEWAY_API_KEY empty.
+      TDAI_GATEWAY_API_KEY: "${MEMORY_CORE_GATEWAY_API_KEY-}"
+      TDAI_DATA_DIR: /data/tdai-memory
+
+  memory-hub:
+    image: ${MEMORY_HUB_IMAGE:-agentmemory/memory-hub:latest}
+    container_name: tdai-memory-hub
+    restart: unless-stopped
+    depends_on:
+      memory-core:
+        condition: service_healthy
+    networks:
+      - tdai-memory-stack
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # Exposure preserved from the running container: published on 0.0.0.0.
+    ports:
+      - "${PANEL_PORT:-8125}:8125"
+      - "${KNOWLEDGE_PORT:-8424}:8424"
+    volumes:
+      - tdai-panel-data:/data/knowledge
+      # Read-only host repo mount for file:// code-graphs; container never writes host repos.
+      - ${MEMORY_HUB_REPOS_MOUNT:-${HOME}/Work/repo}:/mnt/repos:ro
+    environment:
+      PANEL_PORT: "8125"
+      KNOWLEDGE_PORT: "8424"
+      KNOWLEDGE_PUBLIC_BASE_URL: "${KNOWLEDGE_PUBLIC_BASE_URL}"
+      REMOTE_INSTANCE_ID: default
+      REMOTE_INSTANCE_NAME: default
+      REMOTE_INSTANCE_URL: http://memory-core:8420
+      REMOTE_INSTANCE_KEY: "${MEMORY_CORE_GATEWAY_API_KEY:-local}"
+      REMOTE_INSTANCE_PROXY_URL: "${MEMORY_HUB_PROXY_PUBLIC_URL:-http://127.0.0.1:8096}"
+      LLM_MODE: custom
+      LLM_PROTOCOL: "${MEMORY_LLM_PROTOCOL:-openai}"
+      LLM_API_KEY: "${MEMORY_LLM_API_KEY}"
+      LLM_BASE_URL: "${MEMORY_LLM_BASE_URL}"
+      LLM_MODEL: "${MEMORY_LLM_MODEL}"
+      KNOWLEDGE_LLM_BINDING_SYNC: "0"
+
+  proxy:
+    image: ${PROXY_IMAGE:-agentmemory/memory-proxy:latest}
+    container_name: tdai-proxy
+    restart: unless-stopped
+    depends_on:
+      memory-core:
+        condition: service_healthy
+      memory-hub:
+        condition: service_healthy
+    networks:
+      - tdai-memory-stack
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:${PROXY_PORT:-8096}:8096"
+    volumes:
+      # proxy reads upstream URL / key / all toggles from this generated config.
+      - ./.proxy-config/config.yaml:/data/config.yaml:ro
+
+# Adopt the pre-existing network + named volumes so data is reused (no data loss).
+networks:
+  tdai-memory-stack:
+    external: true
+
+volumes:
+  tdai-memory-core-data:
+    external: true
+  tdai-panel-data:
+    external: true
