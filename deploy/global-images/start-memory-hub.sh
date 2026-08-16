@@ -83,6 +83,18 @@ fi
 pull_image "$MEMORY_HUB_IMAGE"
 rm_container_if_exists "$CONTAINER"
 
+# 只读挂载宿主机的中心 clone，供 hub 用 file:///mnt/repos/... 建 codegraph，
+# 容器里 ZERO GitHub 凭据。永远 :ro —— 容器绝不能写宿主机的仓库。
+# 覆盖挂载源：MEMORY_HUB_REPOS_MOUNT=/path/to/repos
+REPOS_MOUNT_SRC="${MEMORY_HUB_REPOS_MOUNT:-$HOME/Work/repo}"
+REPO_MOUNT_ARGS=()
+if [[ -d "$REPOS_MOUNT_SRC" ]]; then
+  REPO_MOUNT_ARGS=(-v "${REPOS_MOUNT_SRC}:/mnt/repos:ro")
+  info "只读挂载本地仓库: ${REPOS_MOUNT_SRC} → /mnt/repos:ro"
+else
+  warn "本地仓库目录不存在，跳过 /mnt/repos 挂载: ${REPOS_MOUNT_SRC}"
+fi
+
 # 内部 knowledge 通过 upstream memory 调 LLM 走 custom 模式，直接指向 MEMORY_LLM_*
 # LLM_MODE=custom → 不走 memory 的 LLM proxy，而是 knowledge 直连用户提供的端点
 info "启动 memory-hub (image=$MEMORY_HUB_IMAGE, panel=$PANEL_PORT knowledge=$KNOWLEDGE_PORT)"
@@ -93,6 +105,7 @@ $DOCKER run -d --name "$CONTAINER" --restart unless-stopped \
   -p "127.0.0.1:${PANEL_PORT}:8125" \
   -p "127.0.0.1:${KNOWLEDGE_PORT}:8424" \
   -v "${PANEL_VOLUME}:/data/knowledge" \
+  ${REPO_MOUNT_ARGS[@]+"${REPO_MOUNT_ARGS[@]}"} \
   -e PANEL_PORT=8125 \
   -e KNOWLEDGE_PORT=8424 \
   -e KNOWLEDGE_PUBLIC_BASE_URL="$KNOWLEDGE_PUBLIC_BASE_URL" \

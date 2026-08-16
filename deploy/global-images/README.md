@@ -140,6 +140,37 @@ proxy 接到用户请求后转发到这组端点。
 
 `docker volume rm` 之前数据一直保留。改名可在 `.env` 里改 `MEMORY_CORE_VOLUME` / `PANEL_VOLUME`。
 
+## CodeGraph 本地源（`file://`，零 GitHub 凭据）
+
+私有仓库无需在容器里放任何 GitHub token —— `start-memory-hub.sh` 把宿主机的中心 clone
+**只读**挂进容器（`-v <src>:/mnt/repos:ro`），CodeGraph 直接从本地路径克隆索引。
+
+- **挂载源**：默认 `~/Work/repo`，用 `MEMORY_HUB_REPOS_MOUNT=/path/to/repos` 覆盖。
+  目录不存在时脚本 `warn` 跳过挂载（不阻塞其它功能）。
+- **永远只读**：容器绝不能写宿主机的 clone（`:ro`）。克隆用 `--no-hardlinks`，
+  绝不 hardlink 进只读的宿主 git objects。
+- **建 CodeGraph**：`repo_url` = `file:///mnt/repos/<owner>/<repo>`，`branch` = 该仓库的
+  **生产分支**（cashio → `master-insurtech`，其余 `master`/`main`）。协议路由见
+  `MemoryKnowledge/src/source-fetcher/`（`file://` → `LocalSourceFetcher`；真实远端 URL
+  仍走 `GitSourceFetcher` 的 https-only + SSRF 校验，规则不变）。
+- **容器里零 token**：无 `/root/.git-credentials`、无 git credential helper。
+
+### 刷新（re-index-after-pull）
+
+自动同步保持 **关闭**，按需重建索引。刷新一个仓库：
+
+```bash
+# 1) 在宿主机把中心 clone 拉到最新（须是干净的生产分支）
+git -C ~/Work/repo/<owner>/<repo> pull
+
+# 2) 触发重新索引（容器直接读只读挂载，无需任何凭据）
+docker exec tdai-memory-hub curl -s -X POST http://127.0.0.1:8424/v3/code-graph/sync \
+  -H 'content-type: application/json' -H 'x-tdai-service-id: default' \
+  -d '{"code_graph_id":"<cg-id>"}'
+```
+
+`code-graph/get` 查状态（`status: ready` + `commit_hash` 应与中心 clone 的 HEAD 一致）。
+
 ## 停止 / 清理
 
 ```bash
