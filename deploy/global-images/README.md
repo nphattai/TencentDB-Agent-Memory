@@ -1,6 +1,8 @@
 # TDAI 全局镜像本地部署
 
-全局三件套镜像的本地拉起脚本 —— `memory-core` + `memory-hub` + `proxy`，可各自独立运行，也能一条命令全部启动。
+整个记忆层的本地拉起脚本 —— `memory-core` + `memory-hub` + `proxy` + `cliproxy`，
+可各自独立运行，也能**一条命令四件套全部启动**（同一个 `fleet-mem` compose 项目，
+MacBook 与 Mac mini 行为一致）。
 
 ## 组件与端口
 
@@ -9,6 +11,12 @@
 | **memory-core** | `tdai-memory-core` | [`agentmemory/memory-core`](https://hub.docker.com/r/agentmemory/memory-core) | `8420` | 内核 gateway，记忆读写、鉴权、skill/RAG 数据面 |
 | **memory-hub**  | `tdai-memory-hub`  | [`agentmemory/memory-hub`](https://hub.docker.com/r/agentmemory/memory-hub)   | `8125` / `8424` | 管理面板 (Panel) + 知识服务 (Knowledge) 合并镜像 |
 | **proxy**       | `tdai-proxy`       | [`agentmemory/memory-proxy`](https://hub.docker.com/r/agentmemory/memory-proxy) | `8096` | LLM 请求转发代理，coding agent 的 API 入口 |
+| **cliproxy**    | `tdai-cliproxy`    | [`eceasy/cli-proxy-api`](https://hub.docker.com/r/eceasy/cli-proxy-api) | `8317` | CLIProxyAPI 上游 LLM 网关（原生 Homebrew 服务收编进来）|
+
+> cliproxy 的上游是 [`router-for-me/CLIProxyAPI`](https://github.com/router-for-me/CLIProxyAPI)，
+> 多架构（`linux/amd64` + `linux/arm64`）公开镜像。它的 **config（含 api-key）+ auth 目录
+> （provider OAuth 凭据）是密钥，只在宿主机上、永不进仓库** —— 通过 `.env` 里 `CLIPROXY_CONFIG_FILE`
+> / `CLIPROXY_AUTH_DIR` 指向宿主机绝对路径挂载。详见下方「Mac mini 首次拉起」与「从 Homebrew 服务迁移」。
 
 > 三个镜像都发布在 Docker Hub 的 [`agentmemory`](https://hub.docker.com/u/agentmemory) 命名空间下，
 > 多架构（`linux/amd64` + `linux/arm64`），公开可拉、无需登录。想固定版本时把 `.env` 里的 tag 从
@@ -39,9 +47,62 @@ $EDITOR .env
 ./verify.sh
 # 不希望发外部请求（离线环境等）：./verify.sh --skip-llm
 
-# 4) 一键拉起三件套
+# 4) 一键拉起四件套（memory-core + memory-hub + proxy + cliproxy）
 ./start-all.sh
 ```
+
+> ⚠️ **MacBook 首次用 compose 版 cliproxy 前，必须先停掉原生 Homebrew 服务**，否则
+> 端口 8317 会被占用、容器起不来。见下方「从 Homebrew 服务迁移」。
+
+## 从 Homebrew 服务迁移（MacBook 一次性手动步骤）
+
+MacBook 上 `cliproxyapi` 原来是 Homebrew 常驻服务（LaunchAgent），监听 `*:8317`。
+收编进 `fleet-mem` compose 后，容器要绑定同一个 8317，**两者不能同时跑**。首次 `docker
+compose up` 前，先把原生服务停掉（**这是船长手动执行的一次性步骤，脚本不会去动宿主机的
+launchd 服务**）：
+
+```bash
+brew services stop cliproxyapi     # 释放 8317，之后由容器接管
+# 确认端口已释放：
+lsof -nP -iTCP:8317 -sTCP:LISTEN   # 应无输出
+```
+
+之后 `./start-all.sh` 就会用容器版 cliproxy 接管 8317。config 与 provider 凭据仍然读宿主机
+原来的 `/opt/homebrew/etc/cliproxyapi.conf` 与 `~/.cli-proxy-api`（通过 `.env` 挂载），凭据不变。
+
+> 想彻底不再用原生服务：`brew services stop cliproxyapi` 即可（保留二进制与 config）。
+> 想临时回退到原生服务：`./stop-all.sh` 停容器后 `brew services start cliproxyapi`。
+
+## Mac mini 首次拉起（把整层搬到 mini）
+
+mini 上没有 Homebrew 装的 cliproxy，也没有它的 config / 凭据 —— 这两份是**密钥，不在仓库里**，
+需要从 MacBook 手动拷过去，再一条命令拉起四件套：
+
+```bash
+# 1) 拉取本仓库最新代码
+git -C <repo> pull
+
+cd <repo>/deploy/global-images
+cp .env.example .env
+$EDITOR .env                       # 填 MEMORY_LLM_* / PROXY_UPSTREAM_*（同 MacBook）
+
+# 2) 从 MacBook 拷贝 cliproxy 的两份密钥到 mini（scp / rsync 均可）：
+#    a. config 文件（含 api-key）
+scp macbook:/opt/homebrew/etc/cliproxyapi.conf  ~/fleet-secrets/cliproxyapi.conf
+#    b. auth 目录（provider OAuth 凭据 + logs/）
+rsync -a macbook:~/.cli-proxy-api/  ~/.cli-proxy-api/
+
+# 3) 在 .env 里把两条路径指向 mini 上拷贝后的真实位置：
+#    CLIPROXY_CONFIG_FILE=${HOME}/fleet-secrets/cliproxyapi.conf
+#    CLIPROXY_AUTH_DIR=${HOME}/.cli-proxy-api      # 若放默认位置可不填（compose 已兜底）
+
+# 4) 一键拉起四件套
+./start-all.sh
+```
+
+> mini 上通常没跑 Homebrew 的 cliproxy，无需先 `brew services stop`；若跑了，同样先停。
+> `.env` 里 `CLIPROXY_CONFIG_FILE` 是**必填**（不同机器路径不同，无可移植默认值）；
+> `CLIPROXY_AUTH_DIR` 不填时 compose 兜底 `${HOME}/.cli-proxy-api`。
 
 ## LLM 通路预检
 
@@ -68,6 +129,7 @@ $EDITOR .env
 - Knowledge Swagger：<http://localhost:8424/docs>
 - Memory Gateway：<http://localhost:8420/>
 - Proxy：<http://localhost:8096/>
+- CLIProxy：<http://localhost:8317/>（带 api-key 访问，如 `GET /v1/models`）
 
 ## 两组独立参数
 
@@ -184,6 +246,7 @@ docker exec tdai-memory-hub curl -s -X POST http://127.0.0.1:8424/v3/code-graph/
 docker logs -f tdai-memory-core
 docker logs -f tdai-memory-hub
 docker logs -f tdai-proxy
+docker logs -f tdai-cliproxy
 ```
 
 memory-hub 内部有两个进程（panel + knowledge），日志分别在容器内 `/data/knowledge/logs/panel.log` 和 `.../knowledge.log`。

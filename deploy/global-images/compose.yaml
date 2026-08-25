@@ -92,6 +92,33 @@ services:
       # proxy reads upstream URL / key / all toggles from this generated config.
       - ./.proxy-config/config.yaml:/data/config.yaml:ro
 
+  # cliproxy: the CLIProxyAPI LLM gateway (upstream router-for-me/CLIProxyAPI).
+  # Was a native Homebrew service on the MacBook; brought into fleet-mem so the whole
+  # memory layer starts with one `docker compose up` on both MacBook and Mac mini.
+  #
+  # Upstream multi-arch image (amd64 + arm64) on Docker Hub. Two host mounts, both
+  # PARAMETERIZED through .env (no machine-specific path hardcoded here):
+  #   - config file  → /CLIProxyAPI/config.yaml  (app reads its config from workdir)
+  #   - auth-dir     → /root/.cli-proxy-api       (config's `auth-dir: "~/..."`, ~ = /root)
+  # The config + auth-dir hold SECRETS (api-key, provider OAuth creds) and live ONLY on
+  # the host, never in the repo. Copy them onto the mini before `up` (see README).
+  cliproxy:
+    image: ${CLIPROXY_IMAGE:-eceasy/cli-proxy-api:latest}
+    container_name: tdai-cliproxy
+    restart: unless-stopped
+    networks:
+      - tdai-memory-stack
+    # Match the native service exposure (*:8317) so other machines on the LAN can reach it.
+    ports:
+      - "${CLIPROXY_PORT:-8317}:8317"
+    volumes:
+      # Config is read-only: the app never writes it. Required host path (only exists where
+      # cliproxy was set up); set CLIPROXY_CONFIG_FILE in .env.
+      - ${CLIPROXY_CONFIG_FILE:?set CLIPROXY_CONFIG_FILE in .env (host path to cliproxyapi.conf)}:/CLIProxyAPI/config.yaml:ro
+      # auth-dir is read-write: cliproxy refreshes provider OAuth tokens and writes logs/ back
+      # into it. Portable default ${HOME}/.cli-proxy-api (upstream default); override in .env.
+      - ${CLIPROXY_AUTH_DIR:-${HOME}/.cli-proxy-api}:/root/.cli-proxy-api
+
 # Adopt the pre-existing network + named volumes so data is reused (no data loss).
 networks:
   tdai-memory-stack:

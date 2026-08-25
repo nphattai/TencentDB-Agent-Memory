@@ -34,7 +34,7 @@ if [[ -f "$COMPOSE_FILE" ]]; then
     --project-directory "$SCRIPT_DIR" ${env_arg[@]+"${env_arg[@]}"} down || true
 fi
 # 兜底：清掉任何遗留的同名容器（例如旧的 standalone docker run 版本）。
-for c in tdai-proxy tdai-memory-hub tdai-memory-core; do
+for c in tdai-cliproxy tdai-proxy tdai-memory-hub tdai-memory-core; do
   if $DOCKER ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$c"; then
     info "移除遗留容器 $c"
     $DOCKER rm -f "$c" >/dev/null
