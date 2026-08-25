@@ -27,7 +27,22 @@ require_vars \
   MEMORY_CORE_VOLUME PANEL_VOLUME \
   MEMORY_LLM_BASE_URL MEMORY_LLM_API_KEY MEMORY_LLM_MODEL \
   KNOWLEDGE_PUBLIC_BASE_URL \
-  PROXY_UPSTREAM_URL PROXY_UPSTREAM_API_KEY PROXY_UPSTREAM_MODEL
+  PROXY_UPSTREAM_URL PROXY_UPSTREAM_API_KEY PROXY_UPSTREAM_MODEL \
+  CLIPROXY_IMAGE CLIPROXY_PORT CLIPROXY_CONFIG_FILE
+
+# cliproxy 的 config 文件 + auth-dir 是宿主机上的密钥（api-key / provider 凭据），只挂载不入库。
+# bind-mount 源不存在时 compose 会静默建成空目录、cliproxy 起不来，所以启动前先拦。
+CLIPROXY_AUTH_DIR="${CLIPROXY_AUTH_DIR:-$HOME/.cli-proxy-api}"
+if [[ ! -f "$CLIPROXY_CONFIG_FILE" ]]; then
+  die "CLIPROXY_CONFIG_FILE 不存在：$CLIPROXY_CONFIG_FILE
+  这是 cliproxy 的 config（含 api-key）。MacBook 上通常是 /opt/homebrew/etc/cliproxyapi.conf；
+  Mac mini 需先从 MacBook 拷过来，再在 .env 里把 CLIPROXY_CONFIG_FILE 指向拷贝后的路径。"
+fi
+if [[ ! -d "$CLIPROXY_AUTH_DIR" ]]; then
+  die "CLIPROXY_AUTH_DIR 不存在：$CLIPROXY_AUTH_DIR
+  这是 cliproxy 的 provider 凭据目录（~/.cli-proxy-api）。先从 MacBook 拷过来，
+  或在 .env 里把 CLIPROXY_AUTH_DIR 指向真实路径。"
+fi
 
 COMPOSE_PROJECT=fleet-mem
 COMPOSE_FILE="$SCRIPT_DIR/compose.yaml"
@@ -69,6 +84,8 @@ compose up -d
 wait_healthy tdai-memory-core 90
 wait_healthy tdai-memory-hub 120
 wait_healthy tdai-proxy 90
+# cliproxy 镜像无 healthcheck：running 即视为就绪（wait_healthy 内部处理 none）。
+wait_healthy tdai-cliproxy 90
 
 # 首次启动初始化 admin user（已初始化则复用 .admin-key）
 init_admin_user
@@ -91,6 +108,6 @@ if [[ -s "$ADMIN_KEY_FILE" ]]; then
   echo "  └────────────────────────────────────────────────────────────────┘"
 fi
 echo ""
-echo "  查看日志：  docker compose -p ${COMPOSE_PROJECT} logs -f [tdai-memory-core|tdai-memory-hub|tdai-proxy]"
+echo "  查看日志：  docker compose -p ${COMPOSE_PROJECT} logs -f [tdai-memory-core|tdai-memory-hub|tdai-proxy|tdai-cliproxy]"
 echo "  停止服务：  ./stop-all.sh"
 echo ""

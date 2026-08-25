@@ -146,5 +146,6 @@ print_endpoints() {
   printf "  │ Knowledge Docs http://localhost:%-24s│\n" "${KNOWLEDGE_PORT}/docs"
   printf "  │ Memory Core     http://localhost:%-24s│\n" "${MEMORY_CORE_PORT}/"
   printf "  │ Proxy          http://localhost:%-24s│\n" "${PROXY_PORT}/"
+  printf "  │ CLIProxy        http://localhost:%-24s│\n" "${CLIPROXY_PORT:-8317}/"
   echo "  └─────────────────────────────────────────────────────────┘"
 }
